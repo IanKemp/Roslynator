@@ -172,6 +172,18 @@ namespace Roslynator
         #endregion SymbolAnalysisContext
 
         #region SyntaxNodeAnalysisContext
+        internal static void ReportDiagnosticIfNotSuppressed(
+            this SyntaxNodeAnalysisContext context,
+            DiagnosticDescriptor descriptor,
+            SyntaxNode node,
+            params object[] messageArgs)
+        {
+            if (context.IsAnalyzerSuppressed(descriptor))
+                return;
+
+            ReportDiagnostic(context, descriptor, node, messageArgs);
+        }
+
         /// <summary>
         /// Report a <see cref="Diagnostic"/> about a <see cref="SyntaxNode"/>.
         /// </summary>
@@ -498,5 +510,37 @@ namespace Roslynator
             context.CancellationToken.ThrowIfCancellationRequested();
         }
         #endregion SyntaxTreeAnalysisContext
+
+        internal static bool IsAnalyzerSuppressed(this SymbolAnalysisContext context, DiagnosticDescriptor descriptor)
+        {
+            return context.Compilation.IsAnalyzerSuppressed(descriptor);
+        }
+
+        internal static bool IsAnalyzerSuppressed(this SyntaxNodeAnalysisContext context, DiagnosticDescriptor descriptor)
+        {
+            return context.Compilation.IsAnalyzerSuppressed(descriptor);
+        }
+
+#pragma warning disable RS1012
+        internal static bool IsAnalyzerSuppressed(this CompilationStartAnalysisContext context, DiagnosticDescriptor descriptor)
+        {
+            return context.Compilation.IsAnalyzerSuppressed(descriptor);
+        }
+
+        internal static bool AreAnalyzersSuppressed(this CompilationStartAnalysisContext context, ImmutableArray<DiagnosticDescriptor> descriptors)
+        {
+            return context.Compilation.AreAnalyzersSuppressed(descriptors);
+        }
+
+        internal static bool AreAnalyzersSuppressed(this CompilationStartAnalysisContext context, DiagnosticDescriptor descriptor1, DiagnosticDescriptor descriptor2)
+        {
+            return context.Compilation.AreAnalyzersSuppressed(descriptor1, descriptor2);
+        }
+
+        internal static bool AreAnalyzersSuppressed(this CompilationStartAnalysisContext context, DiagnosticDescriptor descriptor1, DiagnosticDescriptor descriptor2, DiagnosticDescriptor descriptor3)
+        {
+            return context.Compilation.AreAnalyzersSuppressed(descriptor1, descriptor2, descriptor3);
+        }
+#pragma warning restore RS1012
     }
 }

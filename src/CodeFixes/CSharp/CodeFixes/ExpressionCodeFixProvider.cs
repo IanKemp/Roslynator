@@ -32,7 +32,8 @@ namespace Roslynator.CSharp.CodeFixes
                     CompilerDiagnosticIdentifiers.ResultOfExpressionIsAlwaysConstantSinceValueIsNeverEqualToNull,
                     CompilerDiagnosticIdentifiers.CannotConvertNullToTypeParameterBecauseItCouldBeNonNullableValueType,
                     CompilerDiagnosticIdentifiers.OnlyAssignmentCallIncrementDecrementAndNewObjectExpressionsCanBeUsedAsStatement,
-                    CompilerDiagnosticIdentifiers.CannotImplicitlyConvertType);
+                    CompilerDiagnosticIdentifiers.CannotImplicitlyConvertType,
+                    CompilerDiagnosticIdentifiers.LeftHandSideOfAssignmentMustBeVariablePropertyOrIndexer);
             }
         }
 
@@ -103,9 +104,7 @@ namespace Roslynator.CSharp.CodeFixes
                                             "Use coalesce expression",
                                             cancellationToken =>
                                             {
-                                                ExpressionSyntax defaultValue = (context.Document.SupportsLanguageFeature(CSharpLanguageFeature.DefaultLiteral))
-                                                    ? DefaultLiteralExpression()
-                                                    : convertedType.GetDefaultValueSyntax(semanticModel, expression.SpanStart);
+                                                ExpressionSyntax defaultValue = convertedType.GetDefaultValueSyntax(context.Document.GetDefaultSyntaxOptions());
 
                                                 ExpressionSyntax newNode = CoalesceExpression(expression.WithoutTrivia(), defaultValue)
                                                     .WithTriviaFrom(expression)
@@ -419,7 +418,11 @@ namespace Roslynator.CSharp.CodeFixes
                             {
                                 SemanticModel semanticModel = await context.GetSemanticModelAsync().ConfigureAwait(false);
 
-                                ChangeTypeAccordingToInitializerRefactoring.ComputeCodeFix(context, diagnostic, expression, semanticModel);
+                                CodeFixRegistrationResult result = ChangeTypeAccordingToInitializerRefactoring.ComputeCodeFix(context, diagnostic, expression, semanticModel);
+
+                                if (!result.Success)
+                                    RemoveAssignmentOfVoidExpression(context, diagnostic, expression, semanticModel);
+
                                 break;
                             }
 
@@ -464,6 +467,56 @@ namespace Roslynator.CSharp.CodeFixes
                                     context.RegisterCodeFix(codeAction, diagnostic);
                                 }
                             }
+
+                            break;
+                        }
+                    case CompilerDiagnosticIdentifiers.LeftHandSideOfAssignmentMustBeVariablePropertyOrIndexer:
+                        {
+                            if (!Settings.IsCodeFixEnabled(CodeFixIdentifiers.RemoveConstModifier))
+                                return;
+
+                            if (!expression.IsKind(SyntaxKind.IdentifierName))
+                                return;
+
+                            if (!expression.IsParentKind(SyntaxKind.SimpleAssignmentExpression))
+                                return;
+
+                            SemanticModel semanticModel = await context.GetSemanticModelAsync().ConfigureAwait(false);
+
+                            SymbolInfo symbolInfo = semanticModel.GetSymbolInfo(expression, context.CancellationToken);
+
+                            if (symbolInfo.CandidateReason != CandidateReason.NotAVariable)
+                                return;
+
+                            if (!(symbolInfo.CandidateSymbols.SingleOrDefault(shouldThrow: false) is ILocalSymbol localSymbol))
+                                return;
+
+                            if (!localSymbol.IsConst)
+                                return;
+
+                            SyntaxNode node = localSymbol.GetSyntaxOrDefault(context.CancellationToken);
+
+                            if (!node.IsKind(SyntaxKind.VariableDeclarator))
+                                return;
+
+                            node = node.Parent;
+
+                            if (!node.IsKind(SyntaxKind.VariableDeclaration))
+                                return;
+
+                            node = node.Parent;
+
+                            if (!node.IsKind(SyntaxKind.LocalDeclarationStatement))
+                                return;
+
+                            var localDeclaration = (LocalDeclarationStatementSyntax)node;
+
+                            SyntaxToken constModifier = localDeclaration.Modifiers.Find(SyntaxKind.ConstKeyword);
+
+                            if (!constModifier.IsKind(SyntaxKind.ConstKeyword))
+                                return;
+
+                            ModifiersCodeFixRegistrator.RemoveModifier(context, diagnostic, localDeclaration, constModifier);
 
                             break;
                         }
@@ -621,6 +674,44 @@ namespace Roslynator.CSharp.CodeFixes
 
                 return root.ReplaceNode(nodeToRemove, newNode);
             }
+        }
+
+        private static void RemoveAssignmentOfVoidExpression(
+            CodeFixContext context,
+            Diagnostic diagnostic,
+            ExpressionSyntax expression,
+            SemanticModel semanticModel)
+        {
+            if (!(expression.Parent is AssignmentExpressionSyntax assignmentExpression))
+                return;
+
+            if (expression != assignmentExpression.Right)
+                return;
+
+            if (!(assignmentExpression.Parent is ExpressionStatementSyntax expressionStatement))
+                return;
+
+            ITypeSymbol typeSymbol = semanticModel.GetTypeSymbol(expression, context.CancellationToken);
+
+            if (typeSymbol?.SpecialType != SpecialType.System_Void)
+                return;
+
+            Document document = context.Document;
+
+            CodeAction codeAction = CodeAction.Create(
+                "Remove assignment",
+                ct =>
+                {
+                    ExpressionStatementSyntax newNode = expressionStatement
+                        .WithExpression(expression)
+                        .PrependToLeadingTrivia(expressionStatement.GetLeadingTrivia())
+                        .WithFormatterAnnotation();
+
+                    return document.ReplaceNodeAsync(expressionStatement, newNode, ct);
+                },
+                EquivalenceKey.Create(diagnostic, "RemoveAssignment"));
+
+            context.RegisterCodeFix(codeAction, diagnostic);
         }
     }
 }
